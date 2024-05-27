@@ -1,0 +1,284 @@
+CREATE DATABASE trial;
+
+CREATE TABLE username (
+    nameid INT PRIMARY KEY AUTO_INCREMENT,
+    fname VARCHAR(50),
+    mname VARCHAR(50),
+    lname VARCHAR(50),
+    nickname VARCHAR(50)
+);
+
+
+CREATE TABLE liked_accounts (
+    like_id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT,
+    liked_user_id INT,
+    FOREIGN KEY (user_id) REFERENCES users(userid),
+    FOREIGN KEY (liked_user_id) REFERENCES users(userid)
+);
+
+
+CREATE TABLE preferences (
+    prefid INT PRIMARY KEY AUTO_INCREMENT,
+    age_preference INT,
+    gender_preference ENUM('Male', 'Female'),
+    preferred_location ENUM('Adams', 'Badoc', 'Bangui', 'Banna', 'Batac', 'Burgos', 'Carasi', 'Currimao', 'Dingras', 'Dumalneg', 'Laoag', 'Marcos', 'Nueva Era', 'Pagudpud', 'Paoay', 'Pasuquin', 'Piddig', 'Pinili', 'San Nicolas', 'Sarrat', 'Solsona'),
+    interest SET('Sports', 'Music', 'Movies', 'Books', 'Travel', 'Food', 'Gaming', 'Art', 'Fashion', 'Technology', 'Fitness', 'Other')
+);
+
+CREATE TABLE users (
+    userid INT PRIMARY KEY AUTO_INCREMENT,
+    nameid INT,
+    birthday DATE,
+    age INT,
+    location ENUM('Adams', 'Badoc', 'Bangui', 'Banna', 'Batac', 'Burgos', 'Carasi', 'Currimao', 'Dingras', 'Dumalneg', 'Laoag', 'Marcos', 'Nueva Era', 'Pagudpud', 'Paoay', 'Pasuquin', 'Piddig', 'Pinili', 'San Nicolas', 'Sarrat', 'Solsona'),
+    gender ENUM('Male', 'Female'),
+    preferences INT,
+    profile_picture VARCHAR(255),
+    bio VARCHAR(255),
+    FOREIGN KEY (nameid) REFERENCES username(nameid),
+    FOREIGN KEY (preferences) REFERENCES preferences(prefid)
+);
+
+CREATE TABLE accounts (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    accountid INT,
+    email VARCHAR(255),
+    password VARCHAR(255),
+    FOREIGN KEY (accountid) REFERENCES users(userid)
+);
+
+ALTER TABLE preferences 
+MODIFY COLUMN gender_preference ENUM('Male', 'Female', 'Default') DEFAULT 'Default';
+
+ALTER TABLE preferences 
+MODIFY COLUMN preferred_location ENUM('Adams', 'Badoc', 'Bangui', 'Banna', 'Batac', 'Burgos', 'Carasi', 'Currimao', 'Dingras', 'Dumalneg', 'Laoag', 'Marcos', 'Nueva Era', 'Pagudpud', 'Paoay', 'Pasuquin', 'Piddig', 'Pinili', 'San Nicolas', 'Sarrat', 'Solsona', 'Default') DEFAULT 'Default';
+
+ALTER TABLE preferences
+MODIFY COLUMN age_preference VARCHAR(10);
+
+-------------------------
+
+dashboard.php
+
+<?php
+session_start();
+
+if (!isset($_SESSION['loggedin'])) {
+    header('Location: signin.php');
+    exit;
+}
+
+$loggedin_userid = $_SESSION['userid'];
+
+include 'conn.php';
+
+if (!isset($_SESSION['fname'])) {
+    $sql_fetch_fname = "SELECT fname FROM username WHERE nameid = $loggedin_userid";
+    $result_fname = $conn->query($sql_fetch_fname);
+    if ($result_fname->num_rows > 0) {
+        $row_fname = $result_fname->fetch_assoc();
+        $_SESSION['fname'] = $row_fname['fname'];
+    }
+}
+
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <h2>OnlyYou! Dating System</h2>
+
+    <p>Welcome, <b><?php echo isset($_SESSION['fname']) ? $_SESSION['fname'] : ''; ?></b>!</p>
+    <a href="logout.php">Logout</a><br><br>
+    <a href="user_profile.php">View Profile</a><br><br>
+    <a href="update_preferences.php">Update Preferences</a><br><br>
+
+    <?php
+    
+    $sql_pref = "SELECT gender_preference, preferred_location, interest, age_preference FROM preferences WHERE prefid = (SELECT preferences FROM users WHERE userid = $loggedin_userid)";
+    $result_pref = $conn->query($sql_pref);
+    $user_pref = $result_pref->fetch_assoc();
+    $gender_pref = $user_pref['gender_preference'];
+    $location_pref = $user_pref['preferred_location'];
+    $interest_pref = $user_pref['interest'];
+    $age_preference = $user_pref['age_preference'];
+    
+    $sql = "SELECT users.userid, username.fname, username.mname, username.lname, username.nickname, users.birthday, users.age, users.location, users.gender, preferences.age_preference, preferences.gender_preference, preferences.preferred_location, preferences.interest, users.profile_picture, users.bio 
+            FROM users
+            JOIN username ON users.nameid = username.nameid
+            JOIN preferences ON users.preferences = preferences.prefid
+            WHERE users.userid != $loggedin_userid";
+            
+    if ($gender_pref != 'Default') {
+        $sql .= " AND users.gender = '$gender_pref'";
+    }
+    if ($location_pref != 'Default') {
+        $sql .= " AND users.location = '$location_pref'";
+    }
+    if ($interest_pref != 'Default') {
+        $interests = explode(",", $interest_pref);
+        $interestConditions = [];
+        foreach ($interests as $interest) {
+            $interestConditions[] = "FIND_IN_SET('$interest', preferences.interest)";
+        }
+        $interestSql = implode(" OR ", $interestConditions);
+        $sql .= " AND ($interestSql)";
+    }
+
+    // Handle age preference
+    if (strpos($age_preference, '-') !== false) {
+        list($min_age, $max_age) = explode('-', $age_preference);
+        $sql .= " AND users.age BETWEEN $min_age AND $max_age";
+    } else {
+        $sql .= " AND users.age = $age_preference";
+    }
+
+    $result = $conn->query($sql);
+
+    if ($result->num_rows > 0) {
+        while($row = $result->fetch_assoc()) {
+            echo "<div class='user-profile'>";
+            echo "<img src='{$row['profile_picture']}' alt='Profile Picture' class='user-photo'>";
+            echo "<br>{$row['fname']} <b>({$row['nickname']})</b><br>";
+            echo "<br>{$row['location']}<br>";
+            echo "{$row['gender']}<br>";
+            echo "{$row['age']}<br>";
+            echo "<b>Interests:</b> " . implode(", ", explode(",", $row['interest'])) . "<br>";
+            echo "<br>{$row['bio']}<br>";
+            echo "<button type='submit' name='like'>✔</button> ";
+            echo "<button>✘</button>";
+            echo "<br><br>";
+            echo "</div>";
+        }
+    } else {
+        echo "0 results";
+    }
+
+    $conn->close();
+    ?>
+
+</body>
+</html>
+
+--------------------------
+
+update_preferences.php
+
+<?php
+session_start();
+
+if (!isset($_SESSION['loggedin'])) {
+    header('Location: signin.php');
+    exit;
+}
+
+$loggedin_userid = $_SESSION['userid'];
+
+include 'conn.php';
+
+$sql_pref = "SELECT gender_preference, preferred_location, interest, age_preference FROM preferences WHERE prefid = (SELECT preferences FROM users WHERE userid = $loggedin_userid)";
+$result_pref = $conn->query($sql_pref);
+$current_pref = $result_pref->fetch_assoc();
+$current_gender_pref = $current_pref['gender_preference'];
+$current_location_pref = $current_pref['preferred_location'];
+$current_interest_pref = $current_pref['interest'];
+$current_age_pref = $current_pref['age_preference'];
+
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_preferences'])) {
+    $new_gender_preference = $_POST['gender_preference'];
+    $new_location_preference = $_POST['preferred_location'];
+    $new_age_preference = $_POST['age_preference'];
+    
+    // Handle interests
+    $new_interest_preference = isset($_POST['interests']) ? implode(",", $_POST['interests']) : 'Default';
+    
+    $sql_update_preferences = "UPDATE preferences 
+                               SET gender_preference = '$new_gender_preference', 
+                                   preferred_location = '$new_location_preference',
+                                   age_preference = '$new_age_preference',
+                                   interest = '$new_interest_preference'
+                               WHERE prefid = (SELECT preferences FROM users WHERE userid = $loggedin_userid)";
+    $conn->query($sql_update_preferences);
+    header('Location: dashboard.php');
+    exit;
+}
+
+$conn->close();
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Update Preferences</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <h2>Update Preferences</h2>
+    <form method="POST" action="" onsubmit="return validateForm()">
+        <label for="gender_preference">Gender Preference:</label>
+        <select name="gender_preference" id="gender_preference">
+            <option value="Male" <?php echo ($current_gender_pref == 'Male') ? 'selected' : ''; ?>>Male</option>
+            <option value="Female" <?php echo ($current_gender_pref == 'Female') ? 'selected' : ''; ?>>Female</option>
+            <option value="Default" <?php echo ($current_gender_pref == 'Default') ? 'selected' : ''; ?>>Default</option>
+        </select>
+        <br>
+        <label for="preferred_location">Preferred Location:</label>
+        <select name="preferred_location" id="preferred_location">
+            <?php
+            $locations = ['Adams', 'Badoc', 'Bangui', 'Banna', 'Batac', 'Burgos', 'Carasi', 'Currimao', 'Dingras', 'Dumalneg', 'Laoag', 'Marcos', 'Nueva Era', 'Pagudpud', 'Paoay', 'Pasuquin', 'Piddig', 'Pinili', 'San Nicolas', 'Sarrat', 'Solsona', 'Default'];
+            foreach ($locations as $location) {
+                $selected = ($current_location_pref == $location) ? 'selected' : '';
+                echo "<option value='$location' $selected>$location</option>";
+            }
+            ?>
+        </select>
+        <br>
+        <label for="age_preference">Age Preference:</label><br>
+        <input type="text" id="age_preference" name="age_preference" value="<?php echo $current_age_pref; ?>" required><br><br>
+        <label>Interests:</label><br>
+        <?php
+        $interests = explode(",", $current_interest_pref);
+        $all_interests = ['Sports', 'Music', 'Movies', 'Books', 'Travel', 'Food', 'Gaming', 'Art', 'Fashion', 'Technology', 'Fitness', 'Other'];
+        foreach ($all_interests as $interest) {
+            $checked = (in_array($interest, $interests)) ? 'checked' : '';
+            echo "<input type='checkbox' name='interests[]' value='$interest' $checked> $interest<br>";
+        }
+        ?>
+        <br>
+        <button type="submit" name="update_preferences">Update Preferences</button>
+    </form>
+
+
+    <a href="dashboard.php">Back to Dashboard</a>
+
+    <script>
+        function validateForm() {
+            var checkboxes = document.getElementsByName('interests[]');
+            var checked = false;
+            for (var i = 0; i < checkboxes.length; i++) {
+                if (checkboxes[i].checked) {
+                    checked = true;
+                    break;
+                }
+            }
+            if (!checked) {
+                alert('Please select at least one interest.');
+                return false;
+            }
+            return true;
+        }
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,846 @@
+dashboard.php
+<?php
+session_start();
+
+if (!isset($_SESSION['loggedin'])) {
+    header('Location: signin.php');
+    exit;
+}
+
+$loggedin_userid = $_SESSION['userid'];
+
+include 'conn.php';
+
+if (!isset($_SESSION['fname'])) {
+    $sql_fetch_fname = "SELECT fname FROM username WHERE nameid = $loggedin_userid";
+    $result_fname = $conn->query($sql_fetch_fname);
+    if ($result_fname->num_rows > 0) {
+        $row_fname = $result_fname->fetch_assoc();
+        $_SESSION['fname'] = $row_fname['fname'];
+    }
+}
+
+// Handle the like button click event
+if (isset($_POST['like_user_id'])) {
+    $liked_user_id = $_POST['like_user_id'];
+
+    // Check if the like already exists
+    $sql_check_like = "SELECT * FROM likes WHERE sender_id = $loggedin_userid AND receiver_id = $liked_user_id";
+    $result_check_like = $conn->query($sql_check_like);
+
+    if ($result_check_like->num_rows == 0) {
+        // Insert into likes table with status 'Pending'
+        $sql_insert_like = "INSERT INTO likes (sender_id, receiver_id, status) VALUES ($loggedin_userid, $liked_user_id, 'Pending')";
+        $conn->query($sql_insert_like);
+
+        // Add a notification for the liked user
+        $notification_text = "{$_SESSION['fname']} liked you! Accept or reject?";
+        $sql_add_notification = "INSERT INTO notifications (recipient_id, sender_id, notification_text) VALUES ($liked_user_id, $loggedin_userid, '$notification_text')";
+        $conn->query($sql_add_notification);
+    }
+}
+
+// Handle accept/reject button click event
+if (isset($_POST['notification_id']) && isset($_POST['action'])) {
+    $notification_id = $_POST['notification_id'];
+    $action = $_POST['action'];
+
+    // Get the sender_id and recipient_id from notifications
+    $sql_get_notification = "SELECT sender_id, recipient_id FROM notifications WHERE notification_id = $notification_id";
+    $result_notification = $conn->query($sql_get_notification);
+    $notification = $result_notification->fetch_assoc();
+    $sender_id = $notification['sender_id'];
+    $recipient_id = $notification['recipient_id'];
+
+    if ($action == 'accept') {
+        // Update the likes table with status 'Accepted'
+        $sql_update_like = "UPDATE likes SET status = 'Accepted' WHERE sender_id = $sender_id AND receiver_id = $recipient_id";
+        $conn->query($sql_update_like);
+
+        // Check if the other user also liked back with status 'Accepted'
+        $sql_check_like_back = "SELECT * FROM likes WHERE sender_id = $recipient_id AND receiver_id = $sender_id AND status = 'Accepted'";
+        $result_check_like_back = $conn->query($sql_check_like_back);
+
+        $sql_insert_friend1 = "INSERT INTO friends (user_id1, user_id2) VALUES ($sender_id, $recipient_id)";
+        $conn->query($sql_insert_friend1);
+
+        $sql_insert_friend2 = "INSERT INTO friends (user_id1, user_id2) VALUES ($recipient_id, $sender_id)";
+        $conn->query($sql_insert_friend2);
+
+        // Add a notification for the liked back user
+        $notification_text = "{$_SESSION['fname']} liked you back!";
+        $sql_add_notification = "INSERT INTO notifications (recipient_id, sender_id, notification_text) VALUES ($sender_id, $recipient_id, '$notification_text')";
+        $conn->query($sql_add_notification);
+
+    } elseif ($action == 'reject') {
+        $sql_delete_like = "DELETE FROM likes WHERE sender_id = $sender_id AND receiver_id = $recipient_id";
+        $conn->query($sql_delete_like);
+    }
+
+    // Remove the notification
+    $sql_delete_notification = "DELETE FROM notifications WHERE notification_id = $notification_id";
+    $conn->query($sql_delete_notification);
+}
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <h2>OnlyYou! Dating System</h2>
+
+    <p>Welcome, <b><?php echo isset($_SESSION['fname']) ? $_SESSION['fname'] : ''; ?></b>!</p>
+    <a href="logout.php">Logout</a><br><br>
+    <a href="user_profile.php">View Profile</a><br><br>
+    <a href="filter.php">Filter</a><br><br>
+    <a href="friends.php">Friendlist</a><br><br>
+    <a href="dashboard.php">Dashboard</a><br><br>
+
+    <h2>Your Matches!</h2>
+
+    <?php
+    
+    // Fetch user's preferences
+    $sql_pref = "SELECT gender_preference, preferred_location, interest, age_preference FROM preferences WHERE prefid = (SELECT preferences FROM users WHERE userid = $loggedin_userid)";
+    $result_pref = $conn->query($sql_pref);
+    $user_pref = $result_pref->fetch_assoc();
+    $gender_pref = $user_pref['gender_preference'];
+    $location_pref = $user_pref['preferred_location'];
+    $interest_pref = $user_pref['interest'];
+    $age_preference = $user_pref['age_preference'];
+    
+    // Construct SQL query based on preferences
+    $sql = "SELECT users.userid, username.fname, username.mname, username.lname, username.nickname, users.birthday, users.age, users.location, users.gender, preferences.interest, users.profile_picture, users.bio 
+            FROM users
+            JOIN username ON users.nameid = username.nameid
+            JOIN preferences ON users.preferences = preferences.prefid
+            WHERE users.userid != $loggedin_userid";
+            
+    if ($gender_pref != 'Default') {
+        $sql .= " AND users.gender = '$gender_pref'";
+    }
+    if ($location_pref != 'Default') {
+        $sql .= " AND users.location = '$location_pref'";
+    }
+    if ($interest_pref != 'Default') {
+        $interests = explode(",", $interest_pref);
+        $interestConditions = [];
+        foreach ($interests as $interest) {
+            $interestConditions[] = "FIND_IN_SET('$interest', preferences.interest)";
+        }
+        $interestSql = implode(" OR ", $interestConditions);
+        $sql .= " AND ($interestSql)";
+    }
+
+    if (strpos($age_preference, '-') !== false) {
+        list($min_age, $max_age) = explode('-', $age_preference);
+        $sql .= " AND users.age BETWEEN $min_age AND $max_age";
+    } else {
+        $sql .= " AND users.age = $age_preference";
+    }
+
+    // Execute the query
+    $result = $conn->query($sql);
+
+    // Display user profiles
+    if ($result->num_rows > 0) {
+        while($row = $result->fetch_assoc()) {
+            echo "<div class='user-profile'>";
+            echo "<img src='{$row['profile_picture']}' alt='Profile Picture' class='user-photo'>";
+            echo "<br>{$row['fname']} <b>({$row['nickname']})</b><br>";
+            echo "<br>{$row['location']}<br>";
+            echo "{$row['gender']}<br>";
+            echo "{$row['age']}<br>";
+            echo "<b>Interests:</b> " . implode(", ", explode(",", $row['interest'])) . "<br>";
+            echo "<br>{$row['bio']}<br>";
+            echo "<form method='post' action=''>";
+            echo "<input type='hidden' name='like_user_id' value='{$row['userid']}'>";
+
+            // Check if the logged-in user has already liked this user
+            $sql_check_like_sent = "SELECT * FROM likes WHERE sender_id = $loggedin_userid AND receiver_id = {$row['userid']}";
+            $result_check_like_sent = $conn->query($sql_check_like_sent);
+
+            $sql_check_like_received = "SELECT * FROM likes WHERE sender_id = {$row['userid']} AND receiver_id = $loggedin_userid";
+            $result_check_like_received = $conn->query($sql_check_like_received);
+            if ($result_check_like_sent->num_rows == 0 && $result_check_like_received->num_rows == 0) {
+                // If the like doesn't exist, display the like button
+                echo "<button type='submit' name='like'>Like</button>";
+            } else {
+                // If the like exists, hide the like button
+                echo "<button disabled>Like</button>";
+            }
+
+            echo "</form>";
+            echo "<br><br>";
+            echo "</div>";
+        }
+    } else {
+        echo "0 results";
+    }
+
+    // Fetch and display notifications for the logged-in user
+    $sql_notifications = "SELECT * FROM notifications WHERE recipient_id = $loggedin_userid";
+    $result_notifications = $conn->query($sql_notifications);
+    echo "<h2>Notifications</h2>";
+    if ($result_notifications->num_rows > 0) {
+        while ($notification_row = $result_notifications->fetch_assoc()) {
+            echo "<div class='notification'>";
+            echo "<p>{$notification_row['notification_text']}</p>";
+            echo "<form method='post' action=''>";
+            echo "<input type='hidden' name='notification_id' value='{$notification_row['notification_id']}'>";
+            echo "<input type='hidden' name='sender_id' value='{$notification_row['sender_id']}'>";
+            $liked_user_id = $notification_row['sender_id'];
+    
+            // Check if the user liked back
+            $sql_check_like_back = "SELECT * FROM likes WHERE sender_id = $loggedin_userid AND receiver_id = $liked_user_id AND status = 'Accepted'";
+            $result_check_like_back = $conn->query($sql_check_like_back);
+    
+            if ($result_check_like_back->num_rows == 0) {
+                echo "<button type='submit' name='action' value='accept'>Accept</button> ";
+                echo "<button type='submit' name='action' value='reject'>Reject</button>";
+            } 
+    
+            echo "</form>";
+            echo "</div>";
+        }
+    } else {
+        echo "<p>No notifications.</p>";
+    }
+    
+    $conn->close();
+    ?>
+
+</body>
+</html>
+
+
+[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+
+
+fetch_message.php
+
+<?php
+include 'conn.php';
+
+$sender_id = $_GET['sender_id'];
+$receiver_id = $_GET['receiver_id'];
+
+$sql_messages = "SELECT messages.*, username.fname 
+                 FROM messages 
+                 JOIN users ON messages.sender_id = users.userid 
+                 JOIN username ON users.nameid = username.nameid 
+                 WHERE (sender_id = $sender_id AND receiver_id = $receiver_id) 
+                 OR (sender_id = $receiver_id AND receiver_id = $sender_id) 
+                 ORDER BY timestamp ASC";
+$result_messages = $conn->query($sql_messages);
+
+$messages = '';
+if ($result_messages->num_rows > 0) {
+    while ($row = $result_messages->fetch_assoc()) {
+        $messages .= '<div><strong>' . $row['fname'] . ':</strong> ' . htmlspecialchars($row['message'], ENT_QUOTES, 'UTF-8') . '</div>';
+    }
+}
+
+echo $messages;
+
+$conn->close();
+?>
+
+[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+
+filter.php
+<?php
+session_start();
+
+if (!isset($_SESSION['loggedin'])) {
+    header('Location: signin.php');
+    exit;
+}
+
+$loggedin_userid = $_SESSION['userid'];
+
+include 'conn.php';
+
+$sql_pref = "SELECT gender_preference, preferred_location, interest, age_preference FROM preferences WHERE prefid = (SELECT preferences FROM users WHERE userid = $loggedin_userid)";
+$result_pref = $conn->query($sql_pref);
+$current_pref = $result_pref->fetch_assoc();
+$current_gender_pref = $current_pref['gender_preference'];
+$current_location_pref = $current_pref['preferred_location'];
+$current_interest_pref = $current_pref['interest'];
+$current_age_pref = $current_pref['age_preference'];
+
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_preferences'])) {
+    $new_gender_preference = $_POST['gender_preference'];
+    $new_location_preference = $_POST['preferred_location'];
+    $new_age_preference = $_POST['age_preference'];
+    
+    // Handle interests
+    $new_interest_preference = isset($_POST['interests']) ? implode(",", $_POST['interests']) : 'Default';
+    
+    $sql_update_preferences = "UPDATE preferences 
+                               SET gender_preference = '$new_gender_preference', 
+                                   preferred_location = '$new_location_preference',
+                                   age_preference = '$new_age_preference',
+                                   interest = '$new_interest_preference'
+                               WHERE prefid = (SELECT preferences FROM users WHERE userid = $loggedin_userid)";
+    $conn->query($sql_update_preferences);
+    header('Location: dashboard.php');
+    exit;
+}
+
+$conn->close();
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Update Preferences</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <h2>OnlyYou! Dating System - Filter</h2>
+
+    <p>Welcome, <b><?php echo isset($_SESSION['fname']) ? $_SESSION['fname'] : ''; ?></b>!</p>
+    <a href="logout.php">Logout</a><br><br>
+    <a href="user_profile.php">View Profile</a><br><br>
+    <a href="filter.php">Filter</a><br><br>
+    <a href="friends.php">Friendlist</a><br><br>
+    <a href="dashboard.php">Dashboard</a><br><br>
+
+
+    <h2>Filter Preference</h2>
+    <form method="POST" action="" onsubmit="return validateForm()">
+        <label for="gender_preference">Gender Preference:</label>
+        <select name="gender_preference" id="gender_preference">
+            <option value="Male" <?php echo ($current_gender_pref == 'Male') ? 'selected' : ''; ?>>Male</option>
+            <option value="Female" <?php echo ($current_gender_pref == 'Female') ? 'selected' : ''; ?>>Female</option>
+            <option value="Default" <?php echo ($current_gender_pref == 'Default') ? 'selected' : ''; ?>>Default</option>
+        </select>
+        <br>
+        <label for="preferred_location">Preferred Location:</label>
+        <select name="preferred_location" id="preferred_location">
+            <?php
+            $locations = ['Adams', 'Badoc', 'Bangui', 'Banna', 'Batac', 'Burgos', 'Carasi', 'Currimao', 'Dingras', 'Dumalneg', 'Laoag', 'Marcos', 'Nueva Era', 'Pagudpud', 'Paoay', 'Pasuquin', 'Piddig', 'Pinili', 'San Nicolas', 'Sarrat', 'Solsona', 'Default'];
+            foreach ($locations as $location) {
+                $selected = ($current_location_pref == $location) ? 'selected' : '';
+                echo "<option value='$location' $selected>$location</option>";
+            }
+            ?>
+        </select>
+        <br>
+        <label for="age_preference">Age Preference:</label><br>
+        <input type="text" id="age_preference" name="age_preference" value="<?php echo $current_age_pref; ?>" required><br><br>
+        <label>Interests:</label><br>
+        <?php
+        $interests = explode(",", $current_interest_pref);
+        $all_interests = ['Sports', 'Music', 'Movies', 'Books', 'Travel', 'Food', 'Gaming', 'Art', 'Fashion', 'Technology', 'Fitness', 'Other'];
+        foreach ($all_interests as $interest) {
+            $checked = (in_array($interest, $interests)) ? 'checked' : '';
+            echo "<input type='checkbox' name='interests[]' value='$interest' $checked> $interest<br>";
+        }
+        ?>
+        <br>
+        <button type="submit" name="update_preferences">Update Preferences</button>
+    </form>
+
+        <br>
+    <a href="dashboard.php">Back to Dashboard</a>
+
+    <script>
+        function validateForm() {
+            var checkboxes = document.getElementsByName('interests[]');
+            var checked = false;
+            for (var i = 0; i < checkboxes.length; i++) {
+                if (checkboxes[i].checked) {
+                    checked = true;
+                    break;
+                }
+            }
+            if (!checked) {
+                alert('Please select at least one interest.');
+                return false;
+            }
+            return true;
+        }
+    </script>
+
+</body>
+</html>
+
+[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]
+
+friends.php
+<?php
+session_start();
+
+if (!isset($_SESSION['loggedin'])) {
+    header('Location: signin.php');
+    exit;
+}
+
+$loggedin_userid = $_SESSION['userid'];
+
+include 'conn.php';
+
+// Fetch the full name of the logged-in user if not already set in the session
+if (!isset($_SESSION['fname'])) {
+    $sql_fetch_fname = "SELECT fname FROM username WHERE nameid = $loggedin_userid";
+    $result_fname = $conn->query($sql_fetch_fname);
+    if ($result_fname->num_rows > 0) {
+        $row_fname = $result_fname->fetch_assoc();
+        $_SESSION['fname'] = $row_fname['fname'];
+    }
+}
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Friends</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <h2>OnlyYou! Dating System - Friends</h2>
+
+    <p>Welcome, <b><?php echo isset($_SESSION['fname']) ? $_SESSION['fname'] : ''; ?></b>!</p>
+    <a href="logout.php">Logout</a><br><br>
+    <a href="user_profile.php">View Profile</a><br><br>
+    <a href="filter.php">Filter</a><br><br>
+    <a href="friends.php">Friendlist</a><br><br>
+    <a href="dashboard.php">Dashboard</a><br><br>
+
+    <h3>Your Friends</h3>
+
+    <?php
+    // Fetch friends
+    $sql_friends = "SELECT users.userid, username.fname, username.mname, username.lname, users.profile_picture 
+                    FROM friends 
+                    JOIN users ON (friends.user_id2 = users.userid)
+                    JOIN username ON users.nameid = username.nameid
+                    WHERE friends.user_id1 = $loggedin_userid";
+
+    $result_friends = $conn->query($sql_friends);
+
+    // Display friends
+    if ($result_friends->num_rows > 0) {
+        while ($row = $result_friends->fetch_assoc()) {
+            echo "<div class='friend-profile'>";
+            echo "<img src='{$row['profile_picture']}' alt='Profile Picture' class='user-photo'>";
+            echo "<br>{$row['fname']} {$row['mname']} {$row['lname']}<br>";
+            echo "<a href='message.php?friend_id={$row['userid']}'>Message</a>";
+            echo "</div>";
+        }
+    } else {
+        echo "You have no friends yet.";
+    }
+
+    $conn->close();
+    ?>
+
+</body>
+</html>
+
+[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+
+message.php
+<?php
+session_start();
+
+if (!isset($_SESSION['loggedin'])) {
+    header('Location: signin.php');
+    exit;
+}
+
+$loggedin_userid = $_SESSION['userid'];
+$friend_id = $_GET['friend_id'];
+
+include 'conn.php';
+
+// Fetch messages between the logged-in user and the friend
+$sql_messages = "SELECT messages.*, username.fname 
+                 FROM messages 
+                 JOIN users ON messages.sender_id = users.userid 
+                 JOIN username ON users.nameid = username.nameid 
+                 WHERE (sender_id = $loggedin_userid AND receiver_id = $friend_id) 
+                 OR (sender_id = $friend_id AND receiver_id = $loggedin_userid) 
+                 ORDER BY timestamp ASC";
+$result_messages = $conn->query($sql_messages);
+
+$messages = [];
+if ($result_messages->num_rows > 0) {
+    while ($row = $result_messages->fetch_assoc()) {
+        $messages[] = $row;
+    }
+}
+
+$conn->close();
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Message</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <style>
+        #messages {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 300px;
+            overflow-y: scroll;
+        }
+        #sendingIndicator {
+            display: none;
+            color: green;
+        }
+    </style>
+    <script>
+        $(document).ready(function() {
+            $('#sendButton').click(function() {
+                var message = $('#messageInput').val();
+                if (message.trim() === '') {
+                    alert('Message cannot be empty.');
+                    return;
+                }
+                $('#sendingIndicator').show();
+                $.post('send_message.php', {
+                    sender_id: <?php echo $loggedin_userid; ?>,
+                    receiver_id: <?php echo $friend_id; ?>,
+                    message: message
+                }, function(data) {
+                    $('#messageInput').val('');
+                    $('#messages').append('<div><strong><?php echo $_SESSION['fname']; ?>:</strong> ' + message + '</div>');
+                    $('#sendingIndicator').hide();
+                    loadMessages(); // Reload messages after sending
+                });
+            });
+
+            function loadMessages() {
+                $.get('fetch_messages.php', {
+                    sender_id: <?php echo $loggedin_userid; ?>,
+                    receiver_id: <?php echo $friend_id; ?>
+                }, function(data) {
+                    $('#messages').html(data);
+                });
+            }
+
+        });
+    </script>
+</head>
+<body>
+    <h2>Chat with Friend</h2>
+    <div id="messages">
+        <?php foreach ($messages as $message): ?>
+            <div><strong><?php echo $message['fname']; ?>:</strong> <?php echo htmlspecialchars($message['message'], ENT_QUOTES, 'UTF-8'); ?></div>
+        <?php endforeach; ?>
+    </div>
+    <input type="text" id="messageInput" placeholder="Type your message here">
+    <button id="sendButton">Send</button>
+    <a href="friends.php">Go Back</a>
+    <div id="sendingIndicator">Sending...</div>
+</body>
+</html>
+
+[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]
+
+user_creation.php
+<?php
+session_start();
+
+if (!isset($_SESSION['email'])) {
+    header('Location: signup.php');
+    exit;
+}
+
+$email = $_SESSION['email'];
+$session_password = $_SESSION['password']; 
+
+include 'conn.php';
+
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    $fname = $_POST['fname'];
+    $_SESSION['fname'] = $fname; // Set fname in session
+    $mname = $_POST['mname'];
+    $lname = $_POST['lname'];
+    $nickname = $_POST['nickname'];
+  
+    $sql_username = "INSERT INTO username (fname, mname, lname, nickname) VALUES ('$fname', '$mname', '$lname', '$nickname')";
+    $conn->query($sql_username);
+    $nameid = $conn->insert_id; 
+  
+    $age_preference = $_POST['age_preference'];
+    $gender_preference = $_POST['gender_preference'];
+    $preferred_location = $_POST['preferred_location'];
+    $interests = $_POST['interests'];
+    $interestsString = implode(",", $interests);
+  
+    $sql_preferences = "INSERT INTO preferences (age_preference, gender_preference, preferred_location, interest) VALUES ('$age_preference', '$gender_preference', '$preferred_location', '$interestsString')";
+    $conn->query($sql_preferences);
+    $prefid = $conn->insert_id;
+  
+    $date_of_birth = $_POST['date_of_birth'];
+    $dob = date("Y-m-d", strtotime($date_of_birth)); 
+    $now = new DateTime();
+    $age = $now->diff(new DateTime($dob))->y;  
+  
+    $location = $_POST['location'];
+    $gender = $_POST['gender'];
+  
+    $filename = $_FILES["uploadfile"]["name"];
+    $tempname = $_FILES["uploadfile"]["tmp_name"];
+    $folder = "./image/" . $filename;
+
+    $bio = $_POST['bio'];
+
+    if (move_uploaded_file($tempname, $folder)) {
+
+        $sql_users = "INSERT INTO users (nameid, birthday, age, location, gender, preferences, profile_picture, bio) VALUES ('$nameid', '$dob', '$age', '$location', '$gender', '$prefid', '$folder', '$bio')";
+        $conn->query($sql_users);
+        $userid = $conn->insert_id;  
+
+         $sql_accounts = "INSERT INTO accounts (accountid, email, password) VALUES ('$userid', '$email', '$session_password')"; // Use $session_password here
+        if ($conn->query($sql_accounts) === TRUE) {
+            $_SESSION['loggedin'] = true;
+            $_SESSION['userid'] = $userid;
+            header("Location: dashboard.php");
+            exit;
+        } else {
+            echo "Error: " . $sql_accounts . "<br>" . $conn->error;
+        }
+    } else {
+        echo "Failed to upload image.";
+    }
+  
+    $conn->close();
+}
+?>
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create your Account!</title>
+    <script>
+        function validateAge() {
+            var dob = document.getElementById("date_of_birth").value;
+            var today = new Date();
+            var birthDate = new Date(dob);
+            var age = today.getFullYear() - birthDate.getFullYear();
+            var m = today.getMonth() - birthDate.getMonth();
+            if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+                age--;
+            }
+            if (age < 19) {
+                alert("You must be at least 19 years old to register.");
+                return false;
+            }
+            return true;
+        }
+    </script>
+</head>
+<body>
+    <h2>Create Your Account</h2>
+    <form method="post" enctype="multipart/form-data" onsubmit="return validateAge()">
+        <label for="fname">First Name:</label><br>
+        <input type="text" id="fname" name="fname" required><br>
+        <br>
+        <label for="mname">Middle Name:</label><br>
+        <input type="text" id="mname" name="mname"><br>
+        <br>
+        <label for="lname">Last Name:</label><br>
+        <input type="text" id="lname" name="lname" required><br>
+        <br>
+        <label for="nickname">Nickname:</label><br>
+        <input type="text" id="nickname" name="nickname"><br>
+        <br>
+        <label for="nickname">Bio:</label><br>
+        <input type="text" id="bio" name="bio"><br>
+        <br>
+        <label for="date_of_birth">Date of Birth:</label><br>
+        <input type="date" id="date_of_birth" name="date_of_birth" required><br><br>
+        <label for="location">Location:</label><br>
+        <select id="location" name="location">
+            <option value="Adams">Adams</option>
+            <option value="Badoc">Badoc</option>
+            <option value="Bangui">Bangui</option>
+            <option value="Banna">Banna</option>
+            <option value="Batac">Batac</option>
+            <option value="Burgos">Burgos</option>
+            <option value="Carasi">Carasi</option>
+            <option value="Currimao">Currimao</option>
+            <option value="Dingras">Dingras</option>
+            <option value="Dumalneg">Dumalneg</option>
+            <option value="Laoag">Laoag</option>
+            <option value="Marcos">Marcos</option>
+            <option value="Nueva Era">Nueva Era</option>
+            <option value="Pagudpud">Pagudpud</option>
+            <option value="Paoay">Paoay</option>
+            <option value="Pasuquin">Pasuquin</option>
+            <option value="Piddig">Piddig</option>
+            <option value="Pinili">Pinili</option>
+            <option value="San Nicolas">San Nicolas</option>
+            <option value="Sarrat">Sarrat</option>
+            <option value="Solsona">Solsona</option>
+        </select><br><br>
+        
+        <label for="gender">Gender:</label><br>
+        <select id="gender" name="gender">
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+        </select><br><br>
+        
+        <label for="uploadfile">Profile Picture:</label><br>
+        <input type="file" id="uploadfile" name="uploadfile" required><br><br>
+        
+        <br><hr><br>
+
+        <h2>What is your preference?</h2>
+        <label for="age_preference">Age Preference (min-max):</label><br>
+        <input type="text" id="age_preference" name="age_preference" required><br><br>
+
+        <label for="gender_preference">Gender Preference:</label><br>
+        <select id="gender_preference" name="gender_preference">
+            <option value="Default">Default</option> 
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+        </select><br><br>
+        
+        <label for="preferred_location">Preferred Location:</label><br>
+        <select id="preferred_location" name="preferred_location">
+            <option value="Default">Default</option> 
+            <option value="Adams">Adams</option>
+            <option value="Badoc">Badoc</option>
+            <option value="Bangui">Bangui</option>
+            <option value="Banna">Banna</option>
+            <option value="Batac">Batac</option>
+            <option value="Burgos">Burgos</option>
+            <option value="Carasi">Carasi</option>
+            <option value="Currimao">Currimao</option>
+            <option value="Dingras">Dingras</option>
+            <option value="Dumalneg">Dumalneg</option>
+            <option value="Laoag">Laoag</option>
+            <option value="Marcos">Marcos</option>
+            <option value="Nueva Era">Nueva Era</option>
+            <option value="Pagudpud">Pagudpud</option>
+            <option value="Paoay">Paoay</option>
+            <option value="Pasuquin">Pasuquin</option>
+            <option value="Piddig">Piddig</option>
+            <option value="Pinili">Pinili</option>
+            <option value="San Nicolas">San Nicolas</option>
+            <option value="Sarrat">Sarrat</option>
+            <option value="Solsona">Solsona</option>
+        </select><br><br>
+        
+        <label>Interests:</label><br>
+        <input type="checkbox" name="interests[]" value="Sports"> Sports<br>
+        <input type="checkbox" name="interests[]" value="Music"> Music<br>
+        <input type="checkbox" name="interests[]" value="Movies"> Movies<br>
+        <input type="checkbox" name="interests[]" value="Books"> Books<br>
+        <input type="checkbox" name="interests[]" value="Travel"> Travel<br>
+        <input type="checkbox" name="interests[]" value="Food"> Food<br>
+        <input type="checkbox" name="interests[]" value="Gaming"> Gaming<br>
+        <input type="checkbox" name="interests[]" value="Art"> Art<br>
+        <input type="checkbox" name="interests[]" value="Fashion"> Fashion<br>
+        <input type="checkbox" name="interests[]" value="Technology"> Technology<br>
+        <input type="checkbox" name="interests[]" value="Fitness"> Fitness<br><br>
+
+
+        <input type="submit" value="Submit">
+    </form>
+</body>
+</html>
+
+[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]
+
+user_profile.php
+
+<?php
+session_start();
+
+if (!isset($_SESSION['loggedin'])) {
+    header('Location: signin.php');
+    exit;
+}
+
+$loggedin_userid = $_SESSION['userid'];
+
+include 'conn.php';
+
+$sql = "SELECT users.*, username.fname, username.mname, username.lname, username.nickname, users.birthday, users.gender, preferences.age_preference, preferences.gender_preference,  preferences.interest, preferences.preferred_location FROM users
+        JOIN username ON users.nameid = username.nameid
+        JOIN preferences ON users.preferences = preferences.prefid
+        WHERE users.userid = $loggedin_userid";
+
+$result = $conn->query($sql);
+
+if ($result->num_rows == 1) {
+    $row = $result->fetch_assoc();
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Profile</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <h2>OnlyYou! Dating System - Profile</h2>
+
+    <p>Welcome, <b><?php echo isset($_SESSION['fname']) ? $_SESSION['fname'] : ''; ?></b>!</p>
+    <a href="logout.php">Logout</a><br><br>
+    <a href="user_profile.php">View Profile</a><br><br>
+    <a href="filter.php">Filter</a><br><br>
+    <a href="friends.php">Friendlist</a><br><br>
+    <a href="dashboard.php">Dashboard</a><br><br>
+
+
+    <h2>Your Profile</h2>
+
+    <div class="profile-container">
+        <div class="profile-image">
+            <img src="<?php echo $row['profile_picture']; ?>" class='user-photo'>
+        </div>
+        <div class="profile-details">
+            <p><?php echo $row['fname'] . " " . $row['mname'] . " " . $row['lname'] . " <b>(" . $row['nickname'] . ")</b>"; ?></p>
+            <p><?php echo $row['gender']; ?></p>
+            <p><?php echo $row['location']; ?></p>
+            <p><?php echo $row['birthday']; ?></p>
+            <p><?php echo $row['age']; ?></p>
+            <p><b>Interest: </b><?php echo implode(", ", explode(",", $row['interest'])); ?><br></p>
+            <br>
+            <p><b>Bio</b><br><?php echo $row['bio']; ?></p>
+            <br>
+            <a href="dashboard.php">Go Back</a><br><br>
+
+
+        </div>
+    </div>
+
+</body>
+</html>
+
+<?php
+} else {
+    echo "Error: User profile not found.";
+}
+
+$conn->close();
+?>

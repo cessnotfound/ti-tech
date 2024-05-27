@@ -1,0 +1,230 @@
+
+if (!isset($_SESSION['fname'])) {
+    $sql_fetch_fname = "SELECT fname FROM username WHERE nameid = $loggedin_userid";
+    $result_fname = $conn->query($sql_fetch_fname);
+    if ($result_fname->num_rows > 0) {
+        $row_fname = $result_fname->fetch_assoc();
+        $_SESSION['fname'] = $row_fname['fname'];
+    }
+}
+
+// Handle the like button click event
+if (isset($_POST['like_user_id'])) {
+    $liked_user_id = $_POST['like_user_id'];
+
+    // Check if the like already exists
+    $sql_check_like = "SELECT * FROM likes WHERE sender_id = $loggedin_userid AND receiver_id = $liked_user_id";
+    $result_check_like = $conn->query($sql_check_like);
+
+    if ($result_check_like->num_rows == 0) {
+        // Insert into likes table with status 'Pending'
+        $sql_insert_like = "INSERT INTO likes (sender_id, receiver_id, status) VALUES ($loggedin_userid, $liked_user_id, 'Pending')";
+        $conn->query($sql_insert_like);
+
+        // Add a notification for the liked user
+        $notification_text = "{$_SESSION['fname']} liked you! Accept or reject?";
+        $sql_add_notification = "INSERT INTO notifications (recipient_id, sender_id, notification_text) VALUES ($liked_user_id, $loggedin_userid, '$notification_text')";
+        $conn->query($sql_add_notification);
+    }
+}
+
+// Handle accept/reject button click event
+if (isset($_POST['notification_id']) && isset($_POST['action'])) {
+    $notification_id = $_POST['notification_id'];
+    $action = $_POST['action'];
+
+    // Get the sender_id and recipient_id from notifications
+    $sql_get_notification = "SELECT sender_id, recipient_id FROM notifications WHERE notification_id = $notification_id";
+    $result_notification = $conn->query($sql_get_notification);
+    $notification = $result_notification->fetch_assoc();
+    $sender_id = $notification['sender_id'];
+    $recipient_id = $notification['recipient_id'];
+
+    if ($action == 'accept') {
+        // Update the likes table with status 'Accepted'
+        $sql_update_like = "UPDATE likes SET status = 'Accepted' WHERE sender_id = $sender_id AND receiver_id = $recipient_id";
+        $conn->query($sql_update_like);
+
+        // Check if the other user also liked back with status 'Accepted'
+        $sql_check_like_back = "SELECT * FROM likes WHERE sender_id = $recipient_id AND receiver_id = $sender_id AND status = 'Accepted'";
+        $result_check_like_back = $conn->query($sql_check_like_back);
+
+        $sql_insert_friend1 = "INSERT INTO friends (user_id1, user_id2) VALUES ($sender_id, $recipient_id)";
+        $conn->query($sql_insert_friend1);
+
+        $sql_insert_friend2 = "INSERT INTO friends (user_id1, user_id2) VALUES ($recipient_id, $sender_id)";
+        $conn->query($sql_insert_friend2);
+
+        // Add a notification for the liked back user
+        $notification_text = "{$_SESSION['fname']} liked you back!";
+        $sql_add_notification = "INSERT INTO notifications (recipient_id, sender_id, notification_text) VALUES ($sender_id, $recipient_id, '$notification_text')";
+        $conn->query($sql_add_notification);
+
+    } elseif ($action == 'reject') {
+        $sql_delete_like = "DELETE FROM likes WHERE sender_id = $sender_id AND receiver_id = $recipient_id";
+        $conn->query($sql_delete_like);
+    }
+
+    // Remove the notification
+    $sql_delete_notification = "DELETE FROM notifications WHERE notification_id = $notification_id";
+    $conn->query($sql_delete_notification);
+}
+
+// Fetch current preferences
+$sql_pref = "SELECT gender_preference, preferred_location, interest, age_preference FROM preferences WHERE prefid = (SELECT preferences FROM users WHERE userid = $loggedin_userid)";
+$result_pref = $conn->query($sql_pref);
+$current_pref = $result_pref->fetch_assoc();
+$current_gender_pref = $current_pref['gender_preference'];
+$current_location_pref = $current_pref['preferred_location'];
+$current_interest_pref = $current_pref['interest'];
+$current_age_pref = $current_pref['age_preference'];
+
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_preferences'])) {
+    // Retrieve the new preference values from the form
+    $new_gender_preference = $_POST['gender_preference'];
+    $new_location_preference = $_POST['preferred_location'];
+    $new_age_preference = $_POST['age_preference'];
+    
+    // Handle interests
+    $new_interest_preference = isset($_POST['interests']) ? implode(",", $_POST['interests']) : 'Default';
+    
+    // Update the preferences in the database
+    $sql_update_preferences = "UPDATE preferences 
+                               SET gender_preference = '$new_gender_preference', 
+                                   preferred_location = '$new_location_preference',
+                                   age_preference = '$new_age_preference',
+                                   interest = '$new_interest_preference'
+                               WHERE prefid = (SELECT preferences FROM users WHERE userid = $loggedin_userid)";
+    $conn->query($sql_update_preferences);
+    header('Location: dashboard.php');
+    exit;
+}
+
+
+
+<header id="header">
+    <div class="d-flex flex-column">
+        <div class="profile">
+            <?php
+            echo "<br>";
+            $sql_fetch_profile_photo = "SELECT profile_picture FROM users WHERE userid = $loggedin_userid";
+            $result_profile_photo = $conn->query($sql_fetch_profile_photo);
+            if ($result_profile_photo->num_rows > 0) {
+                $row_profile_photo = $result_profile_photo->fetch_assoc();
+                $profile_photo_url = $row_profile_photo['profile_picture'];
+                echo "<img src='$profile_photo_url' class='user-photo'>";
+            } else {
+                echo "<img src='path_to_default_placeholder_image.jpg' class='user-photo'>";
+            }
+            ?>
+            <h1 class="text-light"><a href="dashboard.php"><?php echo isset($_SESSION['fname']) ? $_SESSION['fname'] : ''; ?></a></h1>
+        </div>
+                    <br>
+        <nav id="navbar" class="nav-menu navbar">
+            <ul>
+                <li><a href="dashboard.php" class="nav-link scrollto active"><i class="bx bx-home"></i> <span>Dashboard</span></a></li>
+                <li><a href="user_profile.php" class="nav-link scrollto "><i class="bx bx-user"></i> <span>View Profile</span></a></li>
+            </ul>
+        </nav>
+    </div>
+</header>
+
+
+
+    <?php
+    
+    // Fetch user's preferences
+    $sql_pref = "SELECT gender_preference, preferred_location, interest, age_preference FROM preferences WHERE prefid = (SELECT preferences FROM users WHERE userid = $loggedin_userid)";
+    $result_pref = $conn->query($sql_pref);
+    $user_pref = $result_pref->fetch_assoc();
+    $gender_pref = $user_pref['gender_preference'];
+    $location_pref = $user_pref['preferred_location'];
+    $interest_pref = $user_pref['interest'];
+    $age_preference = $user_pref['age_preference'];
+    
+    // Construct SQL query based on preferences
+    $sql = "SELECT users.userid, username.fname, username.mname, username.lname, username.nickname, users.birthday, users.age, users.location, users.gender, preferences.interest, users.profile_picture, users.bio 
+            FROM users
+            JOIN username ON users.nameid = username.nameid
+            JOIN preferences ON users.preferences = preferences.prefid
+            WHERE users.userid != $loggedin_userid";
+            
+    if ($gender_pref != 'Default') {
+        $sql .= " AND users.gender = '$gender_pref'";
+    }
+    if ($location_pref != 'Default') {
+        $sql .= " AND users.location = '$location_pref'";
+    }
+    if ($interest_pref != 'Default') {
+        $interests = explode(",", $interest_pref);
+        $interestConditions = [];
+        foreach ($interests as $interest) {
+            $interestConditions[] = "FIND_IN_SET('$interest', preferences.interest)";
+        }
+        $interestSql = implode(" OR ", $interestConditions);
+        $sql .= " AND ($interestSql)";
+    }
+
+    if (strpos($age_preference, '-') !== false) {
+        list($min_age, $max_age) = explode('-', $age_preference);
+        $sql .= " AND users.age BETWEEN $min_age AND $max_age";
+    } else {
+        $sql .= " AND users.age = $age_preference";
+    }
+
+    // Execute the query
+    $result = $conn->query($sql);
+
+    echo "<br>";
+    echo '<div class="swiper-container-wrapper">'; // Added container div
+    echo '<div class="swiper mySwiper">';
+    echo '<div class="swiper-wrapper">';
+    
+    // Display user profiles
+    if ($result->num_rows > 0) {
+      while ($row = $result->fetch_assoc()) {
+          echo "<div class='swiper-slide user-profile'>";
+          echo "<img src='{$row['profile_picture']}' alt='Profile Picture' class='user-photo'>";
+          echo "<div class='user-details'>";
+          echo "<br><span>{$row['fname']} <b>({$row['nickname']})</b></span><br>";
+          echo "<br><span>{$row['location']}</span><br>";
+          echo "<span>{$row['gender']}</span><br>";
+          echo "<span>{$row['age']}</span><br>";
+          echo "<b>Interests:</b> <span>" . implode(", ", explode(",", $row['interest'])) . "</span><br>";
+          echo "<br><span>{$row['bio']}</span><br>";
+          echo "<form method='post' action=''>";
+          echo "<input type='hidden' name='like_user_id' value='{$row['userid']}'>";
+          
+
+  
+          // Check if the logged-in user has already liked this user
+          $sql_check_like_sent = "SELECT * FROM likes WHERE sender_id = $loggedin_userid AND receiver_id = {$row['userid']}";
+          $result_check_like_sent = $conn->query($sql_check_like_sent);
+  
+          $sql_check_like_received = "SELECT * FROM likes WHERE sender_id = {$row['userid']} AND receiver_id = $loggedin_userid";
+          $result_check_like_received = $conn->query($sql_check_like_received);
+  
+          if ($result_check_like_sent->num_rows == 0 && $result_check_like_received->num_rows == 0) {
+              // If the like doesn't exist, display the like button
+              echo "<button type='submit' name='like'>Like</button>";
+          } else {
+              // If the like exists, hide the like button
+              echo "<button disabled>Like</button>";
+          }
+          echo "</div>";
+          echo "</form>";
+          echo "<br><br>";
+          echo "</div>";
+      }
+  } else {
+      echo "0 results";
+  }
+  
+  echo '</div>';
+    echo '<div class="swiper-button-next"></div>';
+    echo '<div class="swiper-button-prev"></div>';
+    echo '</div>'; // Close Swiper container
+    echo '</div>'; // Close wrapper div
+    
+    $conn->close();
+    ?>
